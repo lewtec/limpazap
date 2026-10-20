@@ -12,10 +12,8 @@ name: Cut Release
 # F-Droid will automatically discover the new tag, pick up the version,
 # and build the new release from source on their servers (no MR needed).
 #
-# The "release" workflow will also run on the tag and provide
-# APK + AAB as downloadable workflow artifacts (for direct use if desired).
-#
-# No GitHub Releases are created.
+# The "release" workflow will also run on the tag, upload the APK and Play
+# AAB as workflow artifacts, and attach both files to the GitHub release.
 
 on:
   workflow_dispatch:

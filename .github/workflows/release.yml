@@ -1,10 +1,12 @@
 name: release
 
-# Builds release APK + AAB.
+# Builds a release APK (applicationId com.lucao.limpazap) and a Play App Bundle
+# (applicationId br.tec.lew.limpazap). The Play id is selected only when Gradle
+# is asked for a bundle task, so `flutter build apk` is unchanged.
+#
 # Triggers on pushes to master/main, pull requests, workflow_dispatch, and version tags (v*).
 # The built files are uploaded as workflow artifacts (downloadable from the Actions run).
-#
-# No GitHub Releases are ever created.
+# On version tags, both files are also attached to the GitHub release.
 #
 # For F-Droid: once fdroiddata has AutoUpdateMode + UpdateCheckMode: Tags
 # (which it apparently does for this app), new `vX.Y.Z` tags are automatically
@@ -15,6 +17,9 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -32,8 +37,42 @@ jobs:
       - run: flutter pub get
       - run: flutter pub run flutter_launcher_icons:main
       # - run: flutter test
-      - run: flutter build apk --release
-      - run: flutter build appbundle --release
+      - name: Build release APK
+        run: flutter build apk --release
+      # Separate Gradle invocation from the APK build. bundleRelease selects
+      # applicationId br.tec.lew.limpazap.
+      - name: Build Play app bundle
+        run: flutter build appbundle --release
+
+      - name: Check application ids
+        run: |
+          python3 - <<'PY'
+          import sys
+          import zipfile
+
+          def manifest_bytes(path):
+              data = b""
+              with zipfile.ZipFile(path) as bundle:
+                  names = [name for name in bundle.namelist() if name.endswith("AndroidManifest.xml")]
+                  if not names:
+                      sys.exit(f"no manifest in {path}")
+                  for name in names:
+                      data += bundle.read(name)
+              return data
+
+          def has_id(data, application_id):
+              return application_id.encode() in data or application_id.encode("utf-16le") in data
+
+          fdroid_id = "com.lucao.limpazap"
+          play_id = "br.tec.lew.limpazap"
+          apk = manifest_bytes("build/app/outputs/flutter-apk/app-release.apk")
+          aab = manifest_bytes("build/app/outputs/bundle/release/app-release.aab")
+          if not has_id(apk, fdroid_id) or has_id(apk, play_id):
+              sys.exit("APK must keep applicationId com.lucao.limpazap")
+          # Play id is the bundle applicationId. The namespace class stays com.lucao.limpazap.
+          if not has_id(aab, play_id) or not has_id(aab, fdroid_id):
+              sys.exit("AAB must use applicationId br.tec.lew.limpazap")
+          PY
 
       - name: Upload APK and AAB as workflow artifacts
         uses: actions/upload-artifact@v4
@@ -44,3 +83,18 @@ jobs:
             build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
           retention-days: 90
+
+      - name: Attach APK and AAB to the GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          apk="build/app/outputs/flutter-apk/app-release.apk"
+          aab="build/app/outputs/bundle/release/app-release.aab"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" "$aab" --clobber
+          else
+            gh release create "$tag" "$apk" "$aab" --title "$tag" --generate-notes
+          fi
