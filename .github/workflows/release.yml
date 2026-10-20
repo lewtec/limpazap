@@ -6,7 +6,7 @@ name: release
 #
 # Triggers on pushes to master/main, pull requests, workflow_dispatch, and version tags (v*).
 # The built files are uploaded as workflow artifacts (downloadable from the Actions run).
-# On version tags, both files are also attached to the GitHub release.
+# On a tag ref (push or workflow_dispatch), both files are also attached to the GitHub release.
 #
 # For F-Droid: once fdroiddata has AutoUpdateMode + UpdateCheckMode: Tags
 # (which it apparently does for this app), new `vX.Y.Z` tags are automatically
@@ -77,7 +77,7 @@ jobs:
       - name: Upload APK and AAB as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: limpazap-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+          name: limpazap-${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.sha }}
           path: |
             build/app/outputs/flutter-apk/app-release.apk
             build/app/outputs/bundle/release/app-release.aab
@@ -85,12 +85,12 @@ jobs:
           retention-days: 90
 
       - name: Attach APK and AAB to the GitHub release
-        if: github.ref_type == 'tag'
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${GITHUB_REF#refs/tags/}"
           apk="build/app/outputs/flutter-apk/app-release.apk"
           aab="build/app/outputs/bundle/release/app-release.aab"
           if gh release view "$tag" >/dev/null 2>&1; then
