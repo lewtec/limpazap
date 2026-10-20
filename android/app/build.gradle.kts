@@ -5,7 +5,24 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Play app bundles use a different applicationId. Product flavors are not
+// used: they would rename flavor-less tasks such as assembleRelease and the
+// APK output (app-release.apk). `flutter build appbundle` requests
+// bundleRelease; `flutter build apk` requests assembleRelease. Only bundle
+// tasks select the Play id, and the two artifacts must be built in separate
+// Gradle invocations.
+val fdroidApplicationId = "com.lucao.limpazap"
+val playApplicationId = "br.tec.lew.limpazap"
+
+fun isPlayBundleBuild(): Boolean {
+    return gradle.startParameter.taskNames.any { taskName ->
+        taskName.substringAfterLast(':').startsWith("bundle")
+    }
+}
+
 android {
+    // Namespace is the Java package (MainActivity, R). It stays fixed so both
+    // application ids can share this source set.
     namespace = "com.lucao.limpazap"
     compileSdk = flutter.compileSdkVersion
     // ndkVersion = flutter.ndkVersion
@@ -21,8 +38,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.lucao.limpazap"
+        applicationId = if (isPlayBundleBuild()) playApplicationId else fdroidApplicationId
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
