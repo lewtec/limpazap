@@ -56,14 +56,12 @@ description = "Install dependencies"
 
 [tasks."check:lockfile"]
 description = "Fail if the committed pubspec.lock does not match pubspec.yaml"
-shell = "bash -c"
 run = '''
-set -euo pipefail
-# install refreshes the working tree. Compare the committed lockfile.
-if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-  git checkout -- pubspec.lock
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  git checkout -- pubspec.lock && flutter pub get --enforce-lockfile
+else
+  flutter pub get --enforce-lockfile
 fi
-flutter pub get --enforce-lockfile
 '''
 
 [tasks.test]
@@ -72,13 +70,11 @@ description = "Run tests"
 
 [tasks."build:android"]
 description = "Build the F-Droid APK and the Play app bundle"
-shell = "bash -c"
 run = '''
-set -euo pipefail
-mise run setup-androidsdk
-flutter pub run flutter_launcher_icons:main
-flutter build apk --release
-flutter build appbundle --release
+mise run setup-androidsdk &&
+flutter pub run flutter_launcher_icons:main &&
+flutter build apk --release &&
+flutter build appbundle --release &&
 python3 - <<'PY'
 import sys
 import zipfile
@@ -110,18 +106,15 @@ PY
 
 [tasks.ci]
 description = "Lockfile, lint, tests, and Android release builds"
-shell = "bash -c"
-run = '''
-set -euo pipefail
-mise run check:lockfile
-mise run lint
-mise run test
-mise run build:android
-'''
+run = [
+  "mise run check:lockfile",
+  "mise run lint",
+  "mise run test",
+  "mise run build:android",
+]
 
 [tasks.release]
 description = "Bump pubspec, tag, rebuild, and publish the APK and Play AAB"
-shell = "bash -c"
 usage = '''
 arg "<version>" help="svu mode" {
   choices "next" "major" "minor" "patch"
@@ -129,37 +122,27 @@ arg "<version>" help="svu mode" {
 }
 '''
 run = '''
-set -euo pipefail
-TAG="$(svu "${usage_version}")"
-case "$TAG" in
-  v*) ;;
-  *) TAG="v${TAG}" ;;
-esac
-SEMVER="${TAG#v}"
+TAG="$(svu "${usage_version}")" &&
+SEMVER="${TAG#v}" &&
 if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
   echo "Tag ${TAG} already exists" >&2
   exit 1
-fi
-
-CURRENT="$(yq -r '.version' pubspec.yaml)"
-CURRENT_BUILD="$(echo "$CURRENT" | sed -n 's/.*+\([0-9]*\)$/\1/p')"
-CURRENT_BUILD="${CURRENT_BUILD:-0}"
-NEW_BUILD="$((CURRENT_BUILD + 1))"
-NEW_VERSION="${SEMVER}+${NEW_BUILD}"
-yq -i ".version = \"${NEW_VERSION}\"" pubspec.yaml
-echo "Bumped pubspec version to: ${NEW_VERSION} (tag ${TAG})"
-
-# Build before tagging so a failed build does not publish a tag.
-mise run build:android
-
-git add pubspec.yaml
-git commit -m "chore(release): ${SEMVER}"
-git tag -a "${TAG}" -m "Limpazap ${SEMVER}"
-git push origin HEAD
-git push origin "${TAG}"
-
-apk="build/app/outputs/flutter-apk/app-release.apk"
-aab="build/app/outputs/bundle/release/app-release.aab"
+fi &&
+CURRENT="$(yq -r '.version' pubspec.yaml)" &&
+CURRENT_BUILD="$(echo "$CURRENT" | sed -n 's/.*+\([0-9]*\)$/\1/p')" &&
+CURRENT_BUILD="${CURRENT_BUILD:-0}" &&
+NEW_BUILD="$((CURRENT_BUILD + 1))" &&
+NEW_VERSION="${SEMVER}+${NEW_BUILD}" &&
+yq -i ".version = \"${NEW_VERSION}\"" pubspec.yaml &&
+echo "Bumped pubspec version to: ${NEW_VERSION} (tag ${TAG})" &&
+mise run build:android &&
+git add pubspec.yaml &&
+git commit -m "chore(release): ${SEMVER}" &&
+git tag -a "${TAG}" -m "Limpazap ${SEMVER}" &&
+git push origin HEAD &&
+git push origin "${TAG}" &&
+apk="build/app/outputs/flutter-apk/app-release.apk" &&
+aab="build/app/outputs/bundle/release/app-release.aab" &&
 if gh release view "$TAG" >/dev/null 2>&1; then
   gh release upload "$TAG" "$apk" "$aab" --clobber
 else
