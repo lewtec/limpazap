@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   build:
@@ -27,14 +28,53 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup environment
         uses: jdx/mise-action@v2
 
+      # On branch pushes, refresh dependencies and open a PR when that changes
+      # files (for example pubspec.lock after a Flutter or dependency bump).
+      # Tag builds and pull requests keep the committed lockfile.
+      - name: Setup git config
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
+        run: |
+          git config user.name actions-bot
+          git config user.email actions-bot@users.noreply.github.com
+
+      - name: Install
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
+        run: mise run install
+
+      - name: Create Pull Request if there is new stuff from updaters
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
+        id: pr_create
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
+        with:
+          commit-message: Updater script changes
+          branch: updater-bot
+          delete-branch: true
+          title: "Bot: automated changes"
+          body: |
+            Changes caused from update scripts
+
+      - name: Stop if a pull request was created
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
+        env:
+          PR_NUMBER: ${{ steps.pr_create.outputs.pull-request-number }}
+        run: |
+          if [[ -n "$PR_NUMBER" ]]; then
+            echo "The update scripts changed something and a PR was created. Giving up deploy." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Check lockfile
+        run: flutter pub get --enforce-lockfile
+
       - name: Setup the Android SDK part that sucks
         run: mise run setup-androidsdk
 
-      - run: flutter pub get
       - run: flutter pub run flutter_launcher_icons:main
       # - run: flutter test
       - name: Build release APK

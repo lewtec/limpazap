@@ -32,6 +32,7 @@ jobs:
     permissions:
       actions: write
       contents: write
+      pull-requests: write
     steps:
       - name: Checkout with token for pushing
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -41,6 +42,39 @@ jobs:
 
       - name: Setup environment (gives us yq)
         uses: jdx/mise-action@6d1e696aa24c1aa1bcc1adea0212707c71ab78a8 # v3
+
+      - name: Setup git config
+        run: |
+          git config user.name actions-bot
+          git config user.email actions-bot@users.noreply.github.com
+
+      # Refresh dependencies before tagging. If that changes files, open a PR
+      # and do not tag, so the release is not cut with a stale pubspec.lock.
+      - name: Install
+        run: mise run install
+
+      - name: Create Pull Request if there is new stuff from updaters
+        id: pr_create
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
+        with:
+          commit-message: Updater script changes
+          branch: updater-bot
+          delete-branch: true
+          title: "Bot: automated changes"
+          body: |
+            Changes caused from update scripts
+
+      - name: Stop if a pull request was created
+        env:
+          PR_NUMBER: ${{ steps.pr_create.outputs.pull-request-number }}
+        run: |
+          if [[ -n "$PR_NUMBER" ]]; then
+            echo "The update scripts changed something and a PR was created. Giving up deploy." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Check lockfile
+        run: flutter pub get --enforce-lockfile
 
       - name: Bump version in pubspec.yaml
         run: |

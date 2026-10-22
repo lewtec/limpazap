@@ -24,7 +24,7 @@ android {
     // Namespace is the Java package (MainActivity, R). It stays fixed so both
     // application ids can share this source set.
     namespace = "com.lucao.limpazap"
-    // Flutter 3.27 still defaults compile/target SDK to 35. Play requires 36.
+    // Play requires compile and target SDK 36.
     compileSdk = 36
     // ndkVersion = flutter.ndkVersion
     ndkVersion = "27.0.12077973"
