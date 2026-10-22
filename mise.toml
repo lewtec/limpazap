@@ -1,9 +1,10 @@
 [tools]
 android-sdk = "11.0"
-flutter = "3.27.1"
+flutter = "3.47.7"
 java = "17"
 usage = "2.12.0"
 yq = "4.50.1"
+svu = "3.3.0"
 shfmt = "3.12.0"
 shellcheck = "0.11.0"
 actionlint = "1.7.10"
@@ -11,7 +12,10 @@ dprint = "0.51.1"
 "npm:prettier" = "3.4.2"
 
 [tasks.setup-androidsdk]
-run = 'yes | sdkmanager "platforms;android-36" "platforms;android-34" "build-tools;36.0.0" "build-tools;34.0.0" "cmdline-tools;latest" "platform-tools" && yes | flutter doctor --android-licenses'
+run = '''
+yes | sdkmanager "platforms;android-36" "platforms;android-34" "build-tools;36.0.0" "build-tools;34.0.0" "cmdline-tools;latest" "platform-tools"
+yes | flutter doctor --android-licenses
+'''
 
 [tasks."fmt:dart"]
 run = "dart format ."
@@ -36,6 +40,7 @@ description = "Format all files"
 [tasks."lint:dart"]
 run = "flutter analyze"
 description = "Lint Dart files"
+wait_for = ["check:lockfile"]
 
 [tasks."lint:sh"]
 run = "shellcheck create_backup"
@@ -53,10 +58,105 @@ description = "Lint all files"
 run = "flutter pub get"
 description = "Install dependencies"
 
+[tasks."check:lockfile"]
+description = "Fail if pubspec.lock does not match pubspec.yaml"
+run = "flutter pub get --enforce-lockfile"
+
 [tasks.test]
 run = "flutter test"
 description = "Run tests"
+wait_for = ["check:lockfile"]
+
+[tasks."build:android:icons"]
+description = "Generate Android launcher icons"
+run = "flutter pub run flutter_launcher_icons:main"
+wait_for = ["check:lockfile"]
+
+[tasks."build:android:apk"]
+description = "Build the release APK"
+depends = ["setup-androidsdk", "build:android:icons"]
+wait_for = ["setup-androidsdk", "build:android:icons", "check:lockfile", "release:bump"]
+run = "flutter build apk --release"
+
+# Separate Gradle invocation from the APK build. bundleRelease selects
+# applicationId br.tec.lew.limpazap.
+[tasks."build:android:aab"]
+description = "Build the Play app bundle"
+depends = ["build:android:apk"]
+wait_for = ["build:android:apk"]
+run = "flutter build appbundle --release"
+
+[tasks."check:appid"]
+description = "Check APK and Play bundle application ids"
+depends = ["build:android:apk", "build:android:aab"]
+wait_for = ["build:android:apk", "build:android:aab"]
+run = "python3 scripts/check_application_ids.py"
+
+[tasks."build:android"]
+description = "Build the F-Droid APK and the Play app bundle"
+depends = ["check:appid"]
 
 [tasks.ci]
-depends = ["lint", "test"]
-description = "CI pipeline"
+description = "Lockfile, lint, tests, and Android release builds"
+depends = ["check:lockfile", "lint", "test", "build:android"]
+wait_for = ["check:lockfile", "lint", "test", "build:android"]
+
+[tasks."release:bump"]
+description = "Bump pubspec, commit, and tag"
+usage = '''
+arg "<version>" help="svu mode" {
+  choices "next" "major" "minor" "patch"
+  default "patch"
+}
+'''
+run = '''
+TAG="$(svu "${usage_version}")"
+SEMVER="${TAG#v}"
+if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+  echo "Tag ${TAG} already exists" >&2
+  exit 1
+fi
+CURRENT="$(yq -r '.version' pubspec.yaml)"
+CURRENT_BUILD="$(echo "$CURRENT" | sed -n 's/.*+\([0-9]*\)$/\1/p')"
+CURRENT_BUILD="${CURRENT_BUILD:-0}"
+NEW_BUILD="$((CURRENT_BUILD + 1))"
+NEW_VERSION="${SEMVER}+${NEW_BUILD}"
+yq -i ".version = \"${NEW_VERSION}\"" pubspec.yaml
+git add pubspec.yaml
+git commit -m "chore(release): ${SEMVER}"
+git tag -a "${TAG}" -m "Limpazap ${SEMVER}"
+echo "Bumped pubspec version to: ${NEW_VERSION} (tag ${TAG})"
+'''
+
+[tasks."release:publish"]
+description = "Push the release and attach the APK and AAB"
+usage = '''
+arg "<version>" help="svu mode" {
+  choices "next" "major" "minor" "patch"
+  default "patch"
+}
+'''
+depends = [{ task = "release:bump", args = ["{{ usage.version }}"] }, "build:android"]
+wait_for = ["release:bump", "build:android"]
+run = '''
+TAG="$(git describe --exact-match --tags HEAD)"
+git push origin HEAD
+git push origin "${TAG}"
+apk="build/app/outputs/flutter-apk/app-release.apk"
+aab="build/app/outputs/bundle/release/app-release.aab"
+if gh release view "$TAG" >/dev/null 2>&1; then
+  gh release upload "$TAG" "$apk" "$aab" --clobber
+else
+  gh release create "$TAG" "$apk" "$aab" --title "$TAG" --generate-notes
+fi
+'''
+
+[tasks.release]
+description = "Bump pubspec, tag, rebuild, and publish the APK and Play AAB"
+usage = '''
+arg "<version>" help="svu mode" {
+  choices "next" "major" "minor" "patch"
+  default "patch"
+}
+'''
+depends = [{ task = "release:publish", args = ["{{ usage.version }}"] }]
