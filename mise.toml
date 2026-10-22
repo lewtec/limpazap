@@ -37,6 +37,7 @@ description = "Format all files"
 [tasks."lint:dart"]
 run = "flutter analyze"
 description = "Lint Dart files"
+wait_for = ["check:lockfile"]
 
 [tasks."lint:sh"]
 run = "shellcheck create_backup"
@@ -55,66 +56,50 @@ run = "flutter pub get"
 description = "Install dependencies"
 
 [tasks."check:lockfile"]
-description = "Fail if the committed pubspec.lock does not match pubspec.yaml"
-run = '''
-if [ -n "${GITHUB_ACTIONS:-}" ]; then
-  git checkout -- pubspec.lock && flutter pub get --enforce-lockfile
-else
-  flutter pub get --enforce-lockfile
-fi
-'''
+description = "Fail if pubspec.lock does not match pubspec.yaml"
+run = "flutter pub get --enforce-lockfile"
 
 [tasks.test]
 run = "flutter test"
 description = "Run tests"
+wait_for = ["check:lockfile"]
+
+[tasks."build:android:icons"]
+description = "Generate Android launcher icons"
+run = "flutter pub run flutter_launcher_icons:main"
+wait_for = ["check:lockfile"]
+
+[tasks."build:android:apk"]
+description = "Build the release APK"
+depends = ["setup-androidsdk", "build:android:icons"]
+wait_for = ["setup-androidsdk", "build:android:icons", "check:lockfile", "release:bump"]
+run = "flutter build apk --release"
+
+# Separate Gradle invocation from the APK build. bundleRelease selects
+# applicationId br.tec.lew.limpazap.
+[tasks."build:android:aab"]
+description = "Build the Play app bundle"
+depends = ["build:android:apk"]
+wait_for = ["build:android:apk"]
+run = "flutter build appbundle --release"
+
+[tasks."check:appid"]
+description = "Check APK and Play bundle application ids"
+depends = ["build:android:apk", "build:android:aab"]
+wait_for = ["build:android:apk", "build:android:aab"]
+run = "python3 scripts/check_application_ids.py"
 
 [tasks."build:android"]
 description = "Build the F-Droid APK and the Play app bundle"
-run = '''
-mise run setup-androidsdk &&
-flutter pub run flutter_launcher_icons:main &&
-flutter build apk --release &&
-flutter build appbundle --release &&
-python3 - <<'PY'
-import sys
-import zipfile
-
-def manifest_bytes(path):
-    data = b""
-    with zipfile.ZipFile(path) as bundle:
-        names = [name for name in bundle.namelist() if name.endswith("AndroidManifest.xml")]
-        if not names:
-            sys.exit(f"no manifest in {path}")
-        for name in names:
-            data += bundle.read(name)
-    return data
-
-def has_id(data, application_id):
-    return application_id.encode() in data or application_id.encode("utf-16le") in data
-
-fdroid_id = "com.lucao.limpazap"
-play_id = "br.tec.lew.limpazap"
-apk = manifest_bytes("build/app/outputs/flutter-apk/app-release.apk")
-aab = manifest_bytes("build/app/outputs/bundle/release/app-release.aab")
-if not has_id(apk, fdroid_id) or has_id(apk, play_id):
-    sys.exit("APK must keep applicationId com.lucao.limpazap")
-# Play id is the bundle applicationId. The namespace class stays com.lucao.limpazap.
-if not has_id(aab, play_id) or not has_id(aab, fdroid_id):
-    sys.exit("AAB must use applicationId br.tec.lew.limpazap")
-PY
-'''
+depends = ["check:appid"]
 
 [tasks.ci]
 description = "Lockfile, lint, tests, and Android release builds"
-run = [
-  "mise run check:lockfile",
-  "mise run lint",
-  "mise run test",
-  "mise run build:android",
-]
+depends = ["check:lockfile", "lint", "test", "build:android"]
+wait_for = ["check:lockfile", "lint", "test", "build:android"]
 
-[tasks.release]
-description = "Bump pubspec, tag, rebuild, and publish the APK and Play AAB"
+[tasks."release:bump"]
+description = "Bump pubspec, commit, and tag"
 usage = '''
 arg "<version>" help="svu mode" {
   choices "next" "major" "minor" "patch"
@@ -134,11 +119,24 @@ CURRENT_BUILD="${CURRENT_BUILD:-0}" &&
 NEW_BUILD="$((CURRENT_BUILD + 1))" &&
 NEW_VERSION="${SEMVER}+${NEW_BUILD}" &&
 yq -i ".version = \"${NEW_VERSION}\"" pubspec.yaml &&
-echo "Bumped pubspec version to: ${NEW_VERSION} (tag ${TAG})" &&
-mise run build:android &&
 git add pubspec.yaml &&
 git commit -m "chore(release): ${SEMVER}" &&
 git tag -a "${TAG}" -m "Limpazap ${SEMVER}" &&
+echo "Bumped pubspec version to: ${NEW_VERSION} (tag ${TAG})"
+'''
+
+[tasks."release:publish"]
+description = "Push the release and attach the APK and AAB"
+usage = '''
+arg "<version>" help="svu mode" {
+  choices "next" "major" "minor" "patch"
+  default "patch"
+}
+'''
+depends = [{ task = "release:bump", args = ["{{ usage.version }}"] }, "build:android"]
+wait_for = ["release:bump", "build:android"]
+run = '''
+TAG="$(git describe --exact-match --tags HEAD)" &&
 git push origin HEAD &&
 git push origin "${TAG}" &&
 apk="build/app/outputs/flutter-apk/app-release.apk" &&
@@ -149,3 +147,13 @@ else
   gh release create "$TAG" "$apk" "$aab" --title "$TAG" --generate-notes
 fi
 '''
+
+[tasks.release]
+description = "Bump pubspec, tag, rebuild, and publish the APK and Play AAB"
+usage = '''
+arg "<version>" help="svu mode" {
+  choices "next" "major" "minor" "patch"
+  default "patch"
+}
+'''
+depends = [{ task = "release:publish", args = ["{{ usage.version }}"] }]

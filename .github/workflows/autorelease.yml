@@ -69,7 +69,9 @@ jobs:
           fi
 
       - name: CI
-        run: mise run ci
+        run: |
+          git checkout -- pubspec.lock &&
+          mise run ci
 
       - name: Release
         if: github.event_name == 'workflow_dispatch'
