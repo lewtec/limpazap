@@ -12,7 +12,10 @@ dprint = "0.51.1"
 "npm:prettier" = "3.4.2"
 
 [tasks.setup-androidsdk]
-run = 'yes | sdkmanager "platforms;android-36" "platforms;android-34" "build-tools;36.0.0" "build-tools;34.0.0" "cmdline-tools;latest" "platform-tools" && yes | flutter doctor --android-licenses'
+run = '''
+yes | sdkmanager "platforms;android-36" "platforms;android-34" "build-tools;36.0.0" "build-tools;34.0.0" "cmdline-tools;latest" "platform-tools"
+yes | flutter doctor --android-licenses
+'''
 
 [tasks."fmt:dart"]
 run = "dart format ."
@@ -107,21 +110,21 @@ arg "<version>" help="svu mode" {
 }
 '''
 run = '''
-TAG="$(svu "${usage_version}")" &&
-SEMVER="${TAG#v}" &&
+TAG="$(svu "${usage_version}")"
+SEMVER="${TAG#v}"
 if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
   echo "Tag ${TAG} already exists" >&2
   exit 1
-fi &&
-CURRENT="$(yq -r '.version' pubspec.yaml)" &&
-CURRENT_BUILD="$(echo "$CURRENT" | sed -n 's/.*+\([0-9]*\)$/\1/p')" &&
-CURRENT_BUILD="${CURRENT_BUILD:-0}" &&
-NEW_BUILD="$((CURRENT_BUILD + 1))" &&
-NEW_VERSION="${SEMVER}+${NEW_BUILD}" &&
-yq -i ".version = \"${NEW_VERSION}\"" pubspec.yaml &&
-git add pubspec.yaml &&
-git commit -m "chore(release): ${SEMVER}" &&
-git tag -a "${TAG}" -m "Limpazap ${SEMVER}" &&
+fi
+CURRENT="$(yq -r '.version' pubspec.yaml)"
+CURRENT_BUILD="$(echo "$CURRENT" | sed -n 's/.*+\([0-9]*\)$/\1/p')"
+CURRENT_BUILD="${CURRENT_BUILD:-0}"
+NEW_BUILD="$((CURRENT_BUILD + 1))"
+NEW_VERSION="${SEMVER}+${NEW_BUILD}"
+yq -i ".version = \"${NEW_VERSION}\"" pubspec.yaml
+git add pubspec.yaml
+git commit -m "chore(release): ${SEMVER}"
+git tag -a "${TAG}" -m "Limpazap ${SEMVER}"
 echo "Bumped pubspec version to: ${NEW_VERSION} (tag ${TAG})"
 '''
 
@@ -136,11 +139,11 @@ arg "<version>" help="svu mode" {
 depends = [{ task = "release:bump", args = ["{{ usage.version }}"] }, "build:android"]
 wait_for = ["release:bump", "build:android"]
 run = '''
-TAG="$(git describe --exact-match --tags HEAD)" &&
-git push origin HEAD &&
-git push origin "${TAG}" &&
-apk="build/app/outputs/flutter-apk/app-release.apk" &&
-aab="build/app/outputs/bundle/release/app-release.aab" &&
+TAG="$(git describe --exact-match --tags HEAD)"
+git push origin HEAD
+git push origin "${TAG}"
+apk="build/app/outputs/flutter-apk/app-release.apk"
+aab="build/app/outputs/bundle/release/app-release.aab"
 if gh release view "$TAG" >/dev/null 2>&1; then
   gh release upload "$TAG" "$apk" "$aab" --clobber
 else
