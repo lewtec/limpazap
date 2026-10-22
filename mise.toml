@@ -4,6 +4,7 @@ flutter = "3.47.7"
 java = "17"
 usage = "2.12.0"
 yq = "4.50.1"
+svu = "3.3.0"
 shfmt = "3.12.0"
 shellcheck = "0.11.0"
 actionlint = "1.7.10"
@@ -53,10 +54,115 @@ description = "Lint all files"
 run = "flutter pub get"
 description = "Install dependencies"
 
+[tasks."check:lockfile"]
+description = "Fail if the committed pubspec.lock does not match pubspec.yaml"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+# install refreshes the working tree. Compare the committed lockfile.
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  git checkout -- pubspec.lock
+fi
+flutter pub get --enforce-lockfile
+'''
+
 [tasks.test]
 run = "flutter test"
 description = "Run tests"
 
+[tasks."build:android"]
+description = "Build the F-Droid APK and the Play app bundle"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+mise run setup-androidsdk
+flutter pub run flutter_launcher_icons:main
+flutter build apk --release
+flutter build appbundle --release
+python3 - <<'PY'
+import sys
+import zipfile
+
+def manifest_bytes(path):
+    data = b""
+    with zipfile.ZipFile(path) as bundle:
+        names = [name for name in bundle.namelist() if name.endswith("AndroidManifest.xml")]
+        if not names:
+            sys.exit(f"no manifest in {path}")
+        for name in names:
+            data += bundle.read(name)
+    return data
+
+def has_id(data, application_id):
+    return application_id.encode() in data or application_id.encode("utf-16le") in data
+
+fdroid_id = "com.lucao.limpazap"
+play_id = "br.tec.lew.limpazap"
+apk = manifest_bytes("build/app/outputs/flutter-apk/app-release.apk")
+aab = manifest_bytes("build/app/outputs/bundle/release/app-release.aab")
+if not has_id(apk, fdroid_id) or has_id(apk, play_id):
+    sys.exit("APK must keep applicationId com.lucao.limpazap")
+# Play id is the bundle applicationId. The namespace class stays com.lucao.limpazap.
+if not has_id(aab, play_id) or not has_id(aab, fdroid_id):
+    sys.exit("AAB must use applicationId br.tec.lew.limpazap")
+PY
+'''
+
 [tasks.ci]
-depends = ["lint", "test"]
-description = "CI pipeline"
+description = "Lockfile, lint, tests, and Android release builds"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+mise run check:lockfile
+mise run lint
+mise run test
+mise run build:android
+'''
+
+[tasks.release]
+description = "Bump pubspec, tag, rebuild, and publish the APK and Play AAB"
+shell = "bash -c"
+usage = '''
+arg "<version>" help="svu mode" {
+  choices "next" "major" "minor" "patch"
+  default "patch"
+}
+'''
+run = '''
+set -euo pipefail
+TAG="$(svu "${usage_version}")"
+case "$TAG" in
+  v*) ;;
+  *) TAG="v${TAG}" ;;
+esac
+SEMVER="${TAG#v}"
+if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+  echo "Tag ${TAG} already exists" >&2
+  exit 1
+fi
+
+CURRENT="$(yq -r '.version' pubspec.yaml)"
+CURRENT_BUILD="$(echo "$CURRENT" | sed -n 's/.*+\([0-9]*\)$/\1/p')"
+CURRENT_BUILD="${CURRENT_BUILD:-0}"
+NEW_BUILD="$((CURRENT_BUILD + 1))"
+NEW_VERSION="${SEMVER}+${NEW_BUILD}"
+yq -i ".version = \"${NEW_VERSION}\"" pubspec.yaml
+echo "Bumped pubspec version to: ${NEW_VERSION} (tag ${TAG})"
+
+# Build before tagging so a failed build does not publish a tag.
+mise run build:android
+
+git add pubspec.yaml
+git commit -m "chore(release): ${SEMVER}"
+git tag -a "${TAG}" -m "Limpazap ${SEMVER}"
+git push origin HEAD
+git push origin "${TAG}"
+
+apk="build/app/outputs/flutter-apk/app-release.apk"
+aab="build/app/outputs/bundle/release/app-release.aab"
+if gh release view "$TAG" >/dev/null 2>&1; then
+  gh release upload "$TAG" "$apk" "$aab" --clobber
+else
+  gh release create "$TAG" "$apk" "$aab" --title "$TAG" --generate-notes
+fi
+'''

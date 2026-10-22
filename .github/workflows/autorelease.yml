@@ -1,0 +1,89 @@
+name: Autorelease
+
+# One job for pull requests, the default branch, the weekly run, and a manual
+# release. Tags are not a trigger: the release step pushes a tag and would
+# otherwise start this workflow again.
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      new_version:
+        description: "New tag version"
+        type: choice
+        default: "patch"
+        options:
+          - next
+          - patch
+          - minor
+          - major
+  schedule:
+    - cron: "0 2 * * 6" # saturday 2am
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autorelease:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup git config
+        run: |
+          git config user.name actions-bot
+          git config user.email actions-bot@users.noreply.github.com
+
+      - uses: jdx/mise-action@6d1e696aa24c1aa1bcc1adea0212707c71ab78a8 # v3
+
+      - name: Install
+        run: mise run install
+
+      - name: Create Pull Request if there is new stuff from updaters
+        if: github.event_name != 'pull_request'
+        id: pr_create
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
+        with:
+          commit-message: Updater script changes
+          branch: updater-bot
+          delete-branch: true
+          title: "Bot: automated changes"
+          body: |
+            Changes caused from update scripts
+
+      - name: Stop if a pull request was created
+        if: github.event_name != 'pull_request'
+        env:
+          PR_NUMBER: ${{ steps.pr_create.outputs.pull-request-number }}
+        run: |
+          if [[ -n "$PR_NUMBER" ]]; then
+            echo "The update scripts changed something and a PR was created. Giving up deploy." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: CI
+        run: mise run ci
+
+      - name: Release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ github.event.inputs.new_version }}
+        run: mise run release -- "$NEW_VERSION"
+
+      - name: Upload APK and AAB as workflow artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: limpazap-${{ github.sha }}
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 90
