@@ -2,7 +2,7 @@
 android-sdk = "11.0"
 flutter = "3.47.7"
 java = "17"
-usage = "2.12.0"
+usage = "5.1.0"
 yq = "4.50.1"
 svu = "3.3.0"
 shfmt = "3.12.0"
